@@ -64,10 +64,13 @@ router.get("/mine", verifyToken, async (req, res) => {
   res.json(books.map(serialize));
 });
 
-// Public: all books, with optional ?search= and ?category=
+// Public: all books, 20 per page. Optional ?search= ?category= ?page=
 router.get("/", async (req, res) => {
   const search = text(req.query.search);
   const category = text(req.query.category);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+  const requestedPage = Math.floor(Number(req.query.page));
+  const page = requestedPage >= 1 ? requestedPage : 1;
 
   const filter: Filter<Book> = {};
   if (category) filter.category = category;
@@ -76,8 +79,16 @@ router.get("/", async (req, res) => {
     filter.$or = [{ title: pattern }, { author: pattern }];
   }
 
-  const books = await (await booksCollection()).find(filter).sort({ createdAt: -1 }).toArray();
-  res.json(books.map(serialize));
+  const books = await booksCollection();
+  const total = await books.countDocuments(filter);
+  const items = await books
+    .find(filter)
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .toArray();
+
+  res.json({ books: items.map(serialize), total, page, pages: Math.max(1, Math.ceil(total / limit)) });
 });
 
 // Private: one book

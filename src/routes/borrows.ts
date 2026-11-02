@@ -5,14 +5,6 @@ import { verifyToken } from "../middleware/verify-token.js";
 
 const router = Router();
 
-// Private: the books the signed-in user has borrowed.
-router.get("/mine", verifyToken, async (req, res) => {
-  const borrows = await (await borrowsCollection())
-    .find({ userEmail: String(req.user?.email ?? "") })
-    .sort({ borrowDate: -1 })
-    .toArray();
-  res.json(borrows.map(({ _id, ...rest }) => ({ _id: String(_id), ...rest })));
-});
 
 // Private: return a borrowed book (gives the copy back to the shelf).
 router.delete("/:id", verifyToken, async (req, res) => {
