@@ -47,7 +47,7 @@ const books = [
   {
     title: "Clean Code",
     author: "Robert C. Martin",
-    category: "Technology",
+    category: "Others",
     copies: 2,
     image: cover("9780132350884"),
     description: "A practical handbook on writing readable, maintainable code that other developers will thank you for.",
@@ -55,7 +55,7 @@ const books = [
   {
     title: "Matilda",
     author: "Roald Dahl",
-    category: "Children",
+    category: "Kids",
     copies: 5,
     image: cover("9780142410370"),
     description: "A gifted girl with a love of books uses her quick mind and a little magic to outsmart a cruel headmistress.",

@@ -3,12 +3,11 @@ import { ObjectId, type Filter } from "mongodb";
 import { booksCollection, borrowsCollection } from "../config/db.js";
 import { verifyToken } from "../middleware/verify-token.js";
 import type { Book } from "../types/book.js";
-import type { Borrow } from "../types/borrow.js";
+import { BOOK_CATEGORIES } from "../utils/constants.js";
 import { escapeRegex, isHttpUrl, text } from "../utils/helpers.js";
 
 const router = Router();
 
-const BORROW_DAYS = 7;
 const serialize = ({ _id, ...rest }: Book) => ({ _id: String(_id), ...rest });
 
 type BookFields = Pick<Book, "title" | "author" | "category" | "image" | "description" | "copies">;
@@ -19,11 +18,19 @@ function parseBookFields(body: Record<string, unknown> | undefined, partial: boo
   const fields: Partial<BookFields> = {};
   const has = (key: string) => !partial || input[key] !== undefined;
 
-  for (const key of ["title", "author", "category", "description"] as const) {
+  for (const key of ["title", "author", "description"] as const) {
     if (!has(key)) continue;
     const value = text(input[key]);
     if (!value) return { error: `${key[0].toUpperCase()}${key.slice(1)} is required.` };
     fields[key] = value;
+  }
+
+  if (has("category")) {
+    const category = text(input.category);
+    if (!(BOOK_CATEGORIES as readonly string[]).includes(category)) {
+      return { error: `Category must be one of: ${BOOK_CATEGORIES.join(", ")}.` };
+    }
+    fields.category = category;
   }
 
   if (has("image")) {
@@ -48,32 +55,19 @@ function parseId(value: unknown) {
   return ObjectId.isValid(id) ? new ObjectId(id) : null;
 }
 
-// Public: newest books first. Used by the Home page (New Arrivals).
-router.get("/latest", async (req, res) => {
-  const limit = Math.min(Math.max(Number(req.query.limit) || 6, 1), 24);
-  const books = await (await booksCollection()).find().sort({ createdAt: -1 }).limit(limit).toArray();
-  res.json(books.map(serialize));
-});
-
-// Private: the books the signed-in user added.
-router.get("/mine", verifyToken, async (req, res) => {
-  const books = await (await booksCollection())
-    .find({ ownerEmail: String(req.user?.email ?? "") })
-    .sort({ createdAt: -1 })
-    .toArray();
-  res.json(books.map(serialize));
-});
-
-// Public: all books, 20 per page. Optional ?search= ?category= ?page=
+// Public: books, newest first (sorted and limited in MongoDB).
+// Optional: ?search= ?category= ?email= (books added by one user) ?page= ?limit= (default 20)
 router.get("/", async (req, res) => {
   const search = text(req.query.search);
   const category = text(req.query.category);
-  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+  const email = text(req.query.email);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
   const requestedPage = Math.floor(Number(req.query.page));
   const page = requestedPage >= 1 ? requestedPage : 1;
 
   const filter: Filter<Book> = {};
   if (category) filter.category = category;
+  if (email) filter.ownerEmail = email;
   if (search) {
     const pattern = new RegExp(escapeRegex(search), "i");
     filter.$or = [{ title: pattern }, { author: pattern }];
@@ -180,58 +174,6 @@ router.delete("/:id", verifyToken, async (req, res) => {
 
   await books.deleteOne({ _id });
   res.json({ message: "Book deleted." });
-});
-
-// Private: borrow a book for 7 days
-router.post("/:id/borrow", verifyToken, async (req, res) => {
-  const _id = parseId(req.params.id);
-  if (!_id) {
-    res.status(400).json({ message: "Invalid book id." });
-    return;
-  }
-
-  const userEmail = String(req.user?.email ?? "");
-  const userName = String(req.user?.name ?? "");
-  const books = await booksCollection();
-  const borrows = await borrowsCollection();
-  const bookId = String(_id);
-
-  if (await borrows.findOne({ bookId, userEmail })) {
-    res.status(409).json({ message: "You already borrowed this book" });
-    return;
-  }
-
-  // Take one copy only if one is left, so two people cannot borrow the last copy.
-  const book = await books.findOneAndUpdate({ _id, copies: { $gt: 0 } }, { $inc: { copies: -1 } });
-  if (!book) {
-    const exists = await books.findOne({ _id }, { projection: { _id: 1 } });
-    res.status(exists ? 409 : 404).json({ message: exists ? "No copies left to borrow." : "Book not found." });
-    return;
-  }
-
-  const borrowDate = new Date();
-  const returnDate = new Date(borrowDate.getTime() + BORROW_DAYS * 24 * 60 * 60 * 1000);
-  const borrow: Borrow = {
-    bookId,
-    bookTitle: book.title,
-    bookImage: book.image,
-    userEmail,
-    userName,
-    borrowDate,
-    returnDate,
-  };
-
-  try {
-    const result = await borrows.insertOne(borrow);
-    res.status(201).json({ ...borrow, _id: String(result.insertedId) });
-  } catch (error) {
-    await books.updateOne({ _id }, { $inc: { copies: 1 } }); // give the copy back
-    if ((error as { code?: number }).code === 11000) {
-      res.status(409).json({ message: "You already borrowed this book" });
-      return;
-    }
-    throw error;
-  }
 });
 
 export default router;
